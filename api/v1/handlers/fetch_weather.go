@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/spf13/viper"
@@ -37,6 +36,8 @@ type ENVConfig struct {
 	WeatherStackAPIKey string `mapstructure:"WEATHER_STACK_API_KEY"`
 }
 
+// var Cache = new(map[string]float64)
+
 // LoadConfig reads configuration from app.env file.
 func LoadConfig(path string) (config ENVConfig, err error) {
 	viper.AddConfigPath(path)
@@ -54,25 +55,32 @@ func LoadConfig(path string) (config ENVConfig, err error) {
 	return
 }
 
+// It fetches the data initially from WeatherStack api, if there is an error, it tries the same from OpenWeather api
+// returns an error if the api is unavailable or the response doesn't have the required fields
+// *** The requirement of returning last cached data in case of failure from both APIs has not been implemented ***
 func FetchWeather(c *fiber.Ctx) error {
 	// city := c.Query("city", "")
-	data, err := fetchWeatherStack("Melbourne")
-	// data, err := fetchOpenWeather(city)
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).SendString("Currently we are unable to fetch weather data, please try again later.")
-	}
-	return c.JSON(data)
-}
-
-func fetchOpenWeather(city string) (map[string]float64, error) {
-	var resp *http.Response
-	var err error
-	city = strings.ToLower(city)
 	config, err := LoadConfig(".")
 	if err != nil {
 		log.Fatal("cannot load config:", err)
 	}
-	resp, err = http.Get("http://api.openweathermap.org/data/2.5/weather?appid=" + config.OpenWeatherAPIKey + "&q=" + city + ",AU")
+	data, err := FetchWeatherStack("http://api.weatherstack.com/current?access_key=" + config.WeatherStackAPIKey + "&query=Melbourne")
+	if err != nil {
+		data, err = FetchOpenWeather("http://api.openweathermap.org/data/2.5/weather?appid=" + config.OpenWeatherAPIKey + "&q=melbourne,AU")
+	}
+	if err != nil {
+		return c.JSON(nil)
+	}
+	// *Cache = data
+	return c.JSON(data)
+}
+
+// It fetches the data from the OpenWeather api and extracts wind speed and temperature form it
+// returns an error if the api is unavailable or the response doesn't have the required fields
+func FetchOpenWeather(weatherApi string) (map[string]float64, error) {
+	var resp *http.Response
+	var err error
+	resp, err = http.Get(weatherApi)
 	if err != nil {
 		log.Default().Println("Openweather api could not be connected")
 		return nil, err
@@ -80,7 +88,11 @@ func fetchOpenWeather(city string) (map[string]float64, error) {
 	defer resp.Body.Close()
 
 	var apiResponse OpenWeatherResponse
-	json.NewDecoder(resp.Body).Decode(&apiResponse)
+	err = json.NewDecoder(resp.Body).Decode(&apiResponse)
+
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string]float64{
 		"wind_speed":          apiResponse.Wind.Speed,
@@ -88,22 +100,24 @@ func fetchOpenWeather(city string) (map[string]float64, error) {
 	}, nil
 }
 
-func fetchWeatherStack(city string) (map[string]float64, error) {
+// It fetches the data from the WeatherStack api and extracts wind speed and temperature form it
+// returns an error if the api is unavailable or the response doesn't have the required fields
+func FetchWeatherStack(weatherApi string) (map[string]float64, error) {
 	var resp *http.Response
 	var err error
-	config, err := LoadConfig(".")
-	if err != nil {
-		log.Fatal("cannot load config:", err)
-	}
-	resp, err = http.Get("http://api.weatherstack.com/current?access_key=" + config.WeatherStackAPIKey + "&query=" + city)
+	resp, err = http.Get(weatherApi)
 	if err != nil {
 		log.Default().Println("Weatherstack api could not be connected")
-		fetchOpenWeather(city)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	var apiResponse WeatherStackResponse
-	json.NewDecoder(resp.Body).Decode(&apiResponse)
+	err = json.NewDecoder(resp.Body).Decode(&apiResponse)
+
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string]float64{
 		"wind_speed":          apiResponse.Current.WindSpeed,
