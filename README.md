@@ -18,6 +18,8 @@ HTTP Service that reports on Melbourne weather
   
 ## Deployment
 
+Change keys in env file with your own keys.
+
 To deploy this project, install previously mentioned air package and run
 
 ```bash
